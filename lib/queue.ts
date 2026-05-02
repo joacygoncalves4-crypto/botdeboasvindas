@@ -25,10 +25,11 @@ export async function processDispatchQueue() {
     .select('*')
     .eq('is_active', true)
 
-  if (!activeGroups?.length) return { processed: 0, followups: 0 }
+  if (!activeGroups?.length) return { processed: 0, followups: 0, failed: 0 }
 
   let processed = 0
   let followups = 0
+  let failed = 0
 
   for (const group of activeGroups) {
     const instances = await fetchConnectedInstances(group.id)
@@ -89,6 +90,7 @@ export async function processDispatchQueue() {
           .from('dispatch_queue')
           .update({ status: 'failed', assigned_instance_id: currentInstance.instance_id })
           .eq('id', item.id)
+        failed++
       }
 
       // Always advance batch counter (success or failure) to keep rotation moving
@@ -133,13 +135,18 @@ export async function processDispatchQueue() {
           .eq('id', ft.id)
 
         followups++
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error sending followup to', ft.participant_phone, err)
+        // Mark as ignored to avoid retry loop on permanent errors (e.g. number doesn't exist)
+        await supabaseAdmin
+          .from('followup_tracking')
+          .update({ status: 'ignored' })
+          .eq('id', ft.id)
       }
     }
   }
 
-  return { processed, followups }
+  return { processed, followups, failed }
 }
 
 async function fetchConnectedInstances(groupId: string): Promise<GroupInstanceWithInstance[]> {
