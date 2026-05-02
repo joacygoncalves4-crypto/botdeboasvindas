@@ -6,7 +6,7 @@ import { evolutionApi } from '@/lib/evolution'
 export async function GET() {
   try {
     const allInstances = await evolutionApi.listInstances()
-    const connected = allInstances.filter((i) => i.status === 'open')
+    const connected = allInstances.filter((i) => i.connectionStatus === 'open')
 
     // Get already imported instances
     const { data: existing } = await supabaseAdmin
@@ -14,7 +14,7 @@ export async function GET() {
       .select('evolution_instance_name')
 
     const existingNames = new Set(existing?.map((i) => i.evolution_instance_name) ?? [])
-    const notImported = connected.filter((i) => !existingNames.has(i.instanceName))
+    const notImported = connected.filter((i) => !existingNames.has(i.name))
 
     return NextResponse.json(notImported)
   } catch (err: any) {

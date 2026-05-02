@@ -1,6 +1,20 @@
 import { supabaseAdmin } from './supabase'
 import { evolutionApi } from './evolution'
-import { Group, GroupInstance, DispatchQueue, FollowupTracking } from '@/types'
+
+type GroupInstanceWithInstance = {
+  id: string
+  group_id: string
+  instance_id: string
+  position: number
+  messages_sent_in_batch: number
+  is_current: boolean
+  instance: {
+    id: string
+    evolution_instance_name: string
+    status: string
+    name: string
+  }
+}
 
 export async function processDispatchQueue() {
   const now = new Date().toISOString()
@@ -8,7 +22,7 @@ export async function processDispatchQueue() {
   // Get all active groups
   const { data: activeGroups } = await supabaseAdmin
     .from('groups')
-    .select('*, group_instances(*, instance:instances(*))')
+    .select('*')
     .eq('is_active', true)
 
   if (!activeGroups?.length) return { processed: 0, followups: 0 }
@@ -17,12 +31,8 @@ export async function processDispatchQueue() {
   let followups = 0
 
   for (const group of activeGroups) {
-    const instances: (GroupInstance & { instance: any })[] = group.group_instances ?? []
-    const connectedInstances = instances
-      .filter((gi) => gi.instance?.status === 'connected')
-      .sort((a, b) => a.position - b.position)
-
-    if (!connectedInstances.length) continue
+    const instances = await fetchConnectedInstances(group.id)
+    if (!instances.length) continue
 
     // Get pending items ready to be sent
     const { data: queueItems } = await supabaseAdmin
@@ -35,30 +45,34 @@ export async function processDispatchQueue() {
       .limit(50)
 
     for (const item of queueItems ?? []) {
-      const currentInstance = await getCurrentInstance(group.id, connectedInstances, group.batch_size)
+      // Re-fetch fresh state from DB on each iteration to keep counters accurate
+      const freshInstances = await fetchConnectedInstances(group.id)
+      if (!freshInstances.length) break
+
+      const currentInstance = await pickCurrentInstance(group.id, freshInstances)
       if (!currentInstance) break
 
       try {
-        // Mark as processing
         await supabaseAdmin
           .from('dispatch_queue')
           .update({ status: 'processing', assigned_instance_id: currentInstance.instance_id })
           .eq('id', item.id)
 
-        // Send welcome message
         await evolutionApi.sendText(
           currentInstance.instance.evolution_instance_name,
           item.participant_phone,
           group.welcome_message ?? 'Bem vindo!'
         )
 
-        // Mark as sent
         await supabaseAdmin
           .from('dispatch_queue')
-          .update({ status: 'sent', sent_at: new Date().toISOString(), assigned_instance_id: currentInstance.instance_id })
+          .update({
+            status: 'sent',
+            sent_at: new Date().toISOString(),
+            assigned_instance_id: currentInstance.instance_id,
+          })
           .eq('id', item.id)
 
-        // Create followup tracking
         await supabaseAdmin.from('followup_tracking').insert({
           dispatch_id: item.id,
           group_id: group.id,
@@ -68,17 +82,17 @@ export async function processDispatchQueue() {
           status: 'waiting_reply',
         })
 
-        // Increment batch counter
-        await incrementBatchCounter(group.id, currentInstance.instance_id, group.batch_size, connectedInstances)
-
         processed++
       } catch (err) {
         console.error('Error sending message to', item.participant_phone, err)
         await supabaseAdmin
           .from('dispatch_queue')
-          .update({ status: 'failed' })
+          .update({ status: 'failed', assigned_instance_id: currentInstance.instance_id })
           .eq('id', item.id)
       }
+
+      // Always advance batch counter (success or failure) to keep rotation moving
+      await advanceBatchCounter(group.id, currentInstance, group.batch_size, freshInstances)
     }
 
     // Process pending followups
@@ -128,65 +142,77 @@ export async function processDispatchQueue() {
   return { processed, followups }
 }
 
-async function getCurrentInstance(
+async function fetchConnectedInstances(groupId: string): Promise<GroupInstanceWithInstance[]> {
+  const { data } = await supabaseAdmin
+    .from('group_instances')
+    .select('*, instance:instances(*)')
+    .eq('group_id', groupId)
+    .order('position', { ascending: true })
+
+  return (data ?? []).filter((gi: any) => gi.instance?.status === 'connected') as GroupInstanceWithInstance[]
+}
+
+async function pickCurrentInstance(
   groupId: string,
-  connectedInstances: (GroupInstance & { instance: any })[],
-  batchSize: number
-) {
+  connectedInstances: GroupInstanceWithInstance[]
+): Promise<GroupInstanceWithInstance | null> {
   if (!connectedInstances.length) return null
 
-  // Find the current active instance
-  const current = connectedInstances.find((gi) => gi.is_current)
+  let current = connectedInstances.find((gi) => gi.is_current)
+
+  // If current is not connected anymore or doesn't exist, fall back to first connected
   if (!current) {
-    // Set first as current
+    current = connectedInstances[0]
+    await supabaseAdmin
+      .from('group_instances')
+      .update({ is_current: false })
+      .eq('group_id', groupId)
     await supabaseAdmin
       .from('group_instances')
       .update({ is_current: true })
-      .eq('id', connectedInstances[0].id)
-    return connectedInstances[0]
+      .eq('id', current.id)
   }
 
   return current
 }
 
-async function incrementBatchCounter(
+async function advanceBatchCounter(
   groupId: string,
-  instanceId: string,
+  current: GroupInstanceWithInstance,
   batchSize: number,
-  connectedInstances: (GroupInstance & { instance: any })[]
+  connectedInstances: GroupInstanceWithInstance[]
 ) {
-  const current = connectedInstances.find((gi) => gi.instance_id === instanceId)
-  if (!current) return
-
   const newCount = current.messages_sent_in_batch + 1
 
   if (newCount >= batchSize) {
-    // Rotate to next instance
-    const currentIndex = connectedInstances.findIndex((gi) => gi.instance_id === instanceId)
+    // Rotate to next connected instance
+    const currentIndex = connectedInstances.findIndex((gi) => gi.id === current.id)
     const nextIndex = (currentIndex + 1) % connectedInstances.length
-    const nextInstance = connectedInstances[nextIndex]
+    const next = connectedInstances[nextIndex]
 
     await supabaseAdmin
       .from('group_instances')
       .update({ is_current: false, messages_sent_in_batch: 0 })
-      .eq('group_id', groupId)
-      .eq('instance_id', instanceId)
+      .eq('id', current.id)
 
     await supabaseAdmin
       .from('group_instances')
       .update({ is_current: true, messages_sent_in_batch: 0 })
-      .eq('group_id', groupId)
-      .eq('instance_id', nextInstance.instance_id)
+      .eq('id', next.id)
   } else {
     await supabaseAdmin
       .from('group_instances')
       .update({ messages_sent_in_batch: newCount })
-      .eq('group_id', groupId)
-      .eq('instance_id', instanceId)
+      .eq('id', current.id)
   }
 }
 
-export async function addToQueue(groupId: string, participantPhone: string, delaySeconds: number, positionInQueue: number) {
+export async function addToQueue(
+  groupId: string,
+  participantPhone: string,
+  delaySeconds: number,
+  positionInQueue: number
+) {
   const scheduledAt = new Date(Date.now() + positionInQueue * delaySeconds * 1000)
 
   await supabaseAdmin.from('dispatch_queue').insert({
@@ -217,7 +243,7 @@ export async function handleIncomingMessage(instanceName: string, senderPhone: s
 
   if (!ft) return
 
-  // Make sure it's from the same instance
+  // Make sure it's from the same instance that sent the welcome
   if (ft.instance?.evolution_instance_name !== instanceName) return
 
   // Get group config for followup delay

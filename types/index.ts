@@ -76,15 +76,14 @@ export interface GroupWithInstances extends Group {
 
 // Evolution API types
 export interface EvolutionInstance {
-  instanceName: string
-  instanceId: string
-  status: string
-  serverUrl: string
-  apikey: string
-  owner?: string
+  id: string
+  name: string
+  connectionStatus: string
+  ownerJid?: string
   profileName?: string
-  profilePictureUrl?: string
+  profilePicUrl?: string
   integration?: string
+  token?: string
 }
 
 export interface EvolutionGroup {

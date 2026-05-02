@@ -247,18 +247,18 @@ export default function InstancesPage() {
               <div className="space-y-2 max-h-60 overflow-y-auto">
                 {availableToImport.map((inst: any) => (
                   <label
-                    key={inst.instanceName}
+                    key={inst.name}
                     className="flex items-center gap-3 p-3 rounded-lg border border-zinc-700 hover:bg-zinc-800 cursor-pointer"
                   >
                     <input
                       type="checkbox"
-                      checked={selectedToImport.includes(inst.instanceName)}
-                      onChange={() => toggleImportSelect(inst.instanceName)}
+                      checked={selectedToImport.includes(inst.name)}
+                      onChange={() => toggleImportSelect(inst.name)}
                       className="accent-green-500"
                     />
                     <div>
-                      <p className="text-sm font-medium text-zinc-100">{inst.instanceName}</p>
-                      {inst.owner && <p className="text-xs text-zinc-500">{inst.owner}</p>}
+                      <p className="text-sm font-medium text-zinc-100">{inst.name}</p>
+                      {inst.ownerJid && <p className="text-xs text-zinc-500">{inst.ownerJid}</p>}
                     </div>
                     <Badge variant="connected" className="ml-auto">Conectado</Badge>
                   </label>
