@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { evolutionApi } from '@/lib/evolution'
+import { getAppUrl } from '@/lib/app-url'
 
 export async function GET() {
   const { data, error } = await supabaseAdmin
@@ -35,7 +36,7 @@ export async function POST(req: Request) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
     // Set webhook
-    const webhookUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'}/api/webhook/${evolutionInstanceName}`
+    const webhookUrl = `${getAppUrl(req)}/api/webhook/${evolutionInstanceName}`
     await evolutionApi.setWebhook(evolutionInstanceName, webhookUrl).catch(console.error)
 
     return NextResponse.json(data, { status: 201 })

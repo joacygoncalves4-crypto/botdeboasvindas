@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { evolutionApi } from '@/lib/evolution'
+import { getAppUrl } from '@/lib/app-url'
 
 // GET: list connected instances from Evolution (not yet imported)
 export async function GET() {
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
   if (!instanceNames?.length) return NextResponse.json({ error: 'instanceNames required' }, { status: 400 })
 
   const results = []
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
+  const appUrl = getAppUrl(req)
 
   for (const instanceName of instanceNames) {
     try {

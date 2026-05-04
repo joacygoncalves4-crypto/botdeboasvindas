@@ -28,6 +28,24 @@ export default function InstancesPage() {
   const [importLoading, setImportLoading] = useState(false)
   const [qrDialog, setQrDialog] = useState<{ instanceId: string; qr: string } | null>(null)
   const [qrPolling, setQrPolling] = useState<string | null>(null)
+  const [fixingWebhooks, setFixingWebhooks] = useState(false)
+
+  async function fixWebhooks() {
+    setFixingWebhooks(true)
+    try {
+      const res = await fetch('/api/instances/fix-webhooks', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        alert(data.error ?? 'Erro ao configurar webhooks')
+      } else {
+        alert(`Webhooks configurados!\n\nURL: ${data.appUrl}\nOK: ${data.fixed}\nFalhou: ${data.failed}`)
+      }
+    } catch (e: any) {
+      alert('Erro: ' + e.message)
+    } finally {
+      setFixingWebhooks(false)
+    }
+  }
 
   const load = useCallback(async () => {
     const res = await fetch('/api/instances')
@@ -125,6 +143,10 @@ export default function InstancesPage() {
           <p className="text-zinc-400 text-sm mt-1">Gerencie suas conexoes WhatsApp</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={fixWebhooks} disabled={fixingWebhooks}>
+            {fixingWebhooks ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            Configurar webhooks
+          </Button>
           <Button variant="outline" size="sm" onClick={openImport}>
             <Download className="w-4 h-4" />
             Importar
