@@ -43,3 +43,17 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json(data)
 }
+
+export async function DELETE(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+
+  // Cleanup related data first (FKs cascade should handle this, but explicit for safety)
+  await supabaseAdmin.from('followup_tracking').delete().eq('group_id', id)
+  await supabaseAdmin.from('dispatch_queue').delete().eq('group_id', id)
+  await supabaseAdmin.from('group_instances').delete().eq('group_id', id)
+
+  const { error } = await supabaseAdmin.from('groups').delete().eq('id', id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  return NextResponse.json({ success: true })
+}

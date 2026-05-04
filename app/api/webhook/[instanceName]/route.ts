@@ -16,11 +16,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
   const { event, data } = payload
 
   // Log every webhook for debugging
-  await supabaseAdmin.from('webhook_logs').insert({
-    instance_name: instanceName,
-    event: event,
-    payload: payload as any,
-  }).then(() => null).catch((e) => console.error('webhook log error:', e))
+  try {
+    await supabaseAdmin.from('webhook_logs').insert({
+      instance_name: instanceName,
+      event: event,
+      payload: payload as any,
+    })
+  } catch (e) {
+    console.error('webhook log error:', e)
+  }
 
   // Update instance status on connection events
   if (event === 'connection.update' || event === 'CONNECTION_UPDATE') {
