@@ -15,6 +15,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
 
   const { event, data } = payload
 
+  // Normalize event name: lowercase, replace . and - with single separator
+  const normalizedEvent = String(event ?? '').toLowerCase().replace(/[._-]/g, '.')
+
   // Log every webhook for debugging
   try {
     await supabaseAdmin.from('webhook_logs').insert({
@@ -27,7 +30,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
   }
 
   // Update instance status on connection events
-  if (event === 'connection.update' || event === 'CONNECTION_UPDATE') {
+  if (normalizedEvent === 'connection.update') {
     const state = (data as any)?.state ?? (data as any)?.status
     const mapped =
       state === 'open' ? 'connected' :
@@ -50,7 +53,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
   }
 
   // New participant joined a group
-  if (event === 'group.participants.update' || event === 'GROUP_PARTICIPANTS_UPDATE') {
+  // Evolution v2 sends as 'group-participants.update' (with dash). Older as 'group.participants.update'
+  if (normalizedEvent === 'group.participants.update') {
     const eventData = data as any
     const action = eventData?.action ?? eventData?.type
     const groupJid = eventData?.id ?? eventData?.groupJid
@@ -67,14 +71,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
 
     if (!group) return NextResponse.json({ ok: true })
 
-    // Get participants who joined
-    const participants: string[] = Array.isArray(eventData?.participants)
+    // Extract phone numbers — Evolution v2 sends participants as objects with phoneNumber field
+    // Older format may send array of strings.
+    const rawParticipants: any[] = Array.isArray(eventData?.participants)
       ? eventData.participants
       : eventData?.participant
         ? [eventData.participant]
         : []
 
-    if (!participants.length) return NextResponse.json({ ok: true })
+    const phones: string[] = rawParticipants
+      .map((p) => extractPhone(p))
+      .filter((p): p is string => !!p)
+
+    if (!phones.length) return NextResponse.json({ ok: true })
 
     // Get current queue size to calculate delay offset
     const { count } = await supabaseAdmin
@@ -85,9 +94,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
 
     const currentQueueSize = count ?? 0
 
-    for (let i = 0; i < participants.length; i++) {
-      const phone = participants[i].replace('@s.whatsapp.net', '').replace('@g.us', '')
-      if (!phone) continue
+    for (let i = 0; i < phones.length; i++) {
+      const phone = phones[i]
 
       // Skip if already in queue for this group
       const { data: existing } = await supabaseAdmin
@@ -103,11 +111,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
       await addToQueue(group.id, phone, group.delay_between_messages, currentQueueSize + i)
     }
 
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true, processed: phones.length })
   }
 
   // Incoming message (potential followup trigger)
-  if (event === 'messages.upsert' || event === 'MESSAGES_UPSERT') {
+  if (normalizedEvent === 'messages.upsert') {
     const messages = (data as any)?.messages ?? [(data as any)]
 
     for (const msg of messages) {
@@ -127,6 +135,35 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
   }
 
   return NextResponse.json({ ok: true })
+}
+
+/**
+ * Extracts a clean phone number from Evolution participant data.
+ * Evolution v2 sends participants as objects: { id: "...@lid", phoneNumber: "5511999999999@s.whatsapp.net" }
+ * Older format sends array of strings: "5511999999999@s.whatsapp.net"
+ * @lid IDs are anonymized identities - we need the real phone number, never the @lid
+ */
+function extractPhone(p: any): string | null {
+  if (!p) return null
+
+  // String format (older Evolution)
+  if (typeof p === 'string') {
+    const cleaned = p.replace('@s.whatsapp.net', '').replace('@g.us', '').replace('@lid', '')
+    // @lid IDs are NOT phone numbers, skip them
+    if (p.includes('@lid')) return null
+    return cleaned || null
+  }
+
+  // Object format (Evolution v2)
+  // Try phoneNumber first (real number), fall back to id only if it's not a @lid
+  const phoneStr =
+    typeof p.phoneNumber === 'string' ? p.phoneNumber :
+    typeof p.id === 'string' && !p.id.includes('@lid') ? p.id :
+    null
+
+  if (!phoneStr) return null
+
+  return phoneStr.replace('@s.whatsapp.net', '').replace('@g.us', '') || null
 }
 
 async function checkAndCancelQueuesForDisconnectedGroups(instanceName: string) {
