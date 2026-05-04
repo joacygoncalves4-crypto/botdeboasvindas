@@ -94,24 +94,34 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
 
     const currentQueueSize = count ?? 0
 
+    // Dedupe window: 24h. Avoid sending welcome twice when multiple bot
+    // instances are in the same group (each one fires its own webhook).
+    const dedupeSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+    let added = 0
     for (let i = 0; i < phones.length; i++) {
       const phone = phones[i]
 
-      // Skip if already in queue for this group
+      // Skip if any entry (pending/processing/sent/failed) exists for this
+      // phone+group within the last 24h. We dedupe even on failed because
+      // we don't want to retry just because another instance fired late.
       const { data: existing } = await supabaseAdmin
         .from('dispatch_queue')
-        .select('id')
+        .select('id, status')
         .eq('group_id', group.id)
         .eq('participant_phone', phone)
-        .eq('status', 'pending')
+        .in('status', ['pending', 'processing', 'sent', 'failed'])
+        .gte('created_at', dedupeSince)
+        .limit(1)
         .maybeSingle()
 
       if (existing) continue
 
-      await addToQueue(group.id, phone, group.delay_between_messages, currentQueueSize + i)
+      await addToQueue(group.id, phone, group.delay_between_messages, currentQueueSize + added)
+      added++
     }
 
-    return NextResponse.json({ ok: true, processed: phones.length })
+    return NextResponse.json({ ok: true, received: phones.length, queued: added })
   }
 
   // Incoming message (potential followup trigger)

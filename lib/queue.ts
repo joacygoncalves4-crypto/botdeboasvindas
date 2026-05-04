@@ -214,20 +214,38 @@ async function advanceBatchCounter(
   }
 }
 
+/**
+ * Adds a participant to the dispatch queue.
+ * Returns true if added, false if duplicate (already in queue for this group).
+ *
+ * The unique partial index `idx_dispatch_queue_active_dedupe` on
+ * (group_id, participant_phone) where status IN (pending, processing)
+ * is the ultimate guard against race conditions when multiple bot
+ * instances forward the same join event.
+ */
 export async function addToQueue(
   groupId: string,
   participantPhone: string,
   delaySeconds: number,
   positionInQueue: number
-) {
+): Promise<boolean> {
   const scheduledAt = new Date(Date.now() + positionInQueue * delaySeconds * 1000)
 
-  await supabaseAdmin.from('dispatch_queue').insert({
+  const { error } = await supabaseAdmin.from('dispatch_queue').insert({
     group_id: groupId,
     participant_phone: participantPhone,
     status: 'pending',
     scheduled_at: scheduledAt.toISOString(),
   })
+
+  if (error) {
+    // 23505 = unique_violation — this is the dedupe constraint catching a
+    // race condition (multiple instances firing webhook simultaneously).
+    // Silent skip is the desired behavior.
+    if (error.code === '23505') return false
+    throw error
+  }
+  return true
 }
 
 export async function cancelGroupQueue(groupId: string) {
