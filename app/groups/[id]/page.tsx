@@ -23,6 +23,7 @@ export default function GroupConfigPage({ params }: { params: Promise<{ id: stri
   const [instances, setInstances] = useState<Instance[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
   const [uploadingMedia, setUploadingMedia] = useState(false)
 
   // Form state
@@ -30,7 +31,6 @@ export default function GroupConfigPage({ params }: { params: Promise<{ id: stri
   const [followupMessage, setFollowupMessage] = useState('')
   const [followupMediaUrl, setFollowupMediaUrl] = useState('')
   const [followupMediaType, setFollowupMediaType] = useState<'image' | 'video' | 'none'>('none')
-  const [followupLinks, setFollowupLinks] = useState<string[]>([''])
   const [delayBetween, setDelayBetween] = useState(10)
   const [followupDelay, setFollowupDelay] = useState(60)
   const [batchSize, setBatchSize] = useState(5)
@@ -49,7 +49,6 @@ export default function GroupConfigPage({ params }: { params: Promise<{ id: stri
       setFollowupMessage(groupData.followup_message ?? '')
       setFollowupMediaUrl(groupData.followup_media_url ?? '')
       setFollowupMediaType(groupData.followup_media_type ?? 'none')
-      setFollowupLinks(groupData.followup_links?.length ? groupData.followup_links : [''])
       setDelayBetween(groupData.delay_between_messages ?? 10)
       setFollowupDelay(groupData.followup_delay ?? 60)
       setBatchSize(groupData.batch_size ?? 5)
@@ -64,38 +63,51 @@ export default function GroupConfigPage({ params }: { params: Promise<{ id: stri
 
   async function handleSave() {
     setSaving(true)
-    const links = followupLinks.filter((l) => l.trim())
+    setSavedAt(null)
 
-    const [groupRes, instancesRes] = await Promise.all([
-      fetch(`/api/groups/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          welcome_message: welcomeMessage,
-          followup_message: followupMessage,
-          followup_media_url: followupMediaUrl || null,
-          followup_media_type: followupMediaType,
-          followup_links: links,
-          delay_between_messages: delayBetween,
-          followup_delay: followupDelay,
-          batch_size: batchSize,
+    try {
+      const [groupRes, instancesRes] = await Promise.all([
+        fetch(`/api/groups/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            welcome_message: welcomeMessage,
+            followup_message: followupMessage,
+            followup_media_url: followupMediaUrl || null,
+            followup_media_type: followupMediaType,
+            followup_links: [],
+            delay_between_messages: delayBetween,
+            followup_delay: followupDelay,
+            batch_size: batchSize,
+          }),
         }),
-      }),
-      fetch(`/api/groups/${id}/instances`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instanceIds: selectedInstances }),
-      }),
-    ])
+        fetch(`/api/groups/${id}/instances`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instanceIds: selectedInstances }),
+        }),
+      ])
 
-    if (groupRes.ok) {
+      if (!groupRes.ok) {
+        const err = await groupRes.json()
+        alert('Erro ao salvar grupo: ' + (err.error ?? 'desconhecido'))
+        return
+      }
+      if (!instancesRes.ok) {
+        const err = await instancesRes.json()
+        alert('Erro ao salvar instancias: ' + (err.error ?? 'desconhecido'))
+        return
+      }
+
       const updated = await groupRes.json()
       setGroup((prev) => prev ? { ...prev, ...updated } : prev)
-    } else {
-      const err = await groupRes.json()
-      alert(err.error ?? 'Erro ao salvar')
+      setSavedAt(Date.now())
+      setTimeout(() => setSavedAt(null), 3000)
+    } catch (e: any) {
+      alert('Erro de conexao: ' + e.message)
+    } finally {
+      setSaving(false)
     }
-    setSaving(false)
   }
 
   async function handleMediaUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -114,14 +126,6 @@ export default function GroupConfigPage({ params }: { params: Promise<{ id: stri
       alert(data.error ?? 'Erro ao fazer upload')
     }
     setUploadingMedia(false)
-  }
-
-  function addLink() { setFollowupLinks((prev) => [...prev, '']) }
-  function updateLink(i: number, val: string) {
-    setFollowupLinks((prev) => prev.map((l, idx) => idx === i ? val : l))
-  }
-  function removeLink(i: number) {
-    setFollowupLinks((prev) => prev.filter((_, idx) => idx !== i))
   }
 
   function toggleInstance(instId: string) {
@@ -154,10 +158,15 @@ export default function GroupConfigPage({ params }: { params: Promise<{ id: stri
           <h1 className="text-2xl font-bold text-zinc-100">{group.name}</h1>
           <p className="text-zinc-400 text-sm">{group.participant_count} membros</p>
         </div>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          {savedAt && (
+            <span className="text-sm text-green-400 flex items-center gap-1">
+              ✓ Salvo!
+            </span>
+          )}
           <Button onClick={handleSave} disabled={saving}>
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            Salvar
+            {saving ? 'Salvando...' : 'Salvar'}
           </Button>
         </div>
       </div>
@@ -335,33 +344,11 @@ export default function GroupConfigPage({ params }: { params: Promise<{ id: stri
                 placeholder="Texto que aparece junto com a midia (ou sozinho se sem midia)..."
                 value={followupMessage}
                 onChange={(e) => setFollowupMessage(e.target.value)}
-                rows={4}
+                rows={6}
               />
-            </div>
-
-            {/* Links */}
-            <div className="space-y-2">
-              <Label>Links</Label>
-              <div className="space-y-2">
-                {followupLinks.map((link, i) => (
-                  <div key={i} className="flex gap-2">
-                    <Input
-                      placeholder="https://..."
-                      value={link}
-                      onChange={(e) => updateLink(i, e.target.value)}
-                    />
-                    {followupLinks.length > 1 && (
-                      <Button variant="ghost" size="icon" onClick={() => removeLink(i)}>
-                        <X className="w-4 h-4" />
-                      </Button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <Button variant="outline" size="sm" onClick={addLink}>
-                <Plus className="w-3 h-3" />
-                Adicionar link
-              </Button>
+              <p className="text-xs text-zinc-500">
+                Coloque links direto no texto (ex: https://exemplo.com)
+              </p>
             </div>
           </CardContent>
         </Card>
