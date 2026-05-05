@@ -39,9 +39,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
       null
 
     if (mapped) {
+      const update: Record<string, unknown> = { status: mapped }
+      if (mapped === 'connected') {
+        update.qr_code = null
+        // Record connection time so we can ignore false-positive group joins
+        // that fire when WhatsApp Web syncs after a fresh login.
+        update.connected_at = new Date().toISOString()
+      }
+
       await supabaseAdmin
         .from('instances')
-        .update({ status: mapped, qr_code: mapped === 'connected' ? null : undefined })
+        .update(update)
         .eq('evolution_instance_name', instanceName)
 
       // If all instances in a group disconnected, cancel their queues
@@ -60,6 +68,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
     const groupJid = eventData?.id ?? eventData?.groupJid
 
     if (action !== 'add') return NextResponse.json({ ok: true })
+
+    // Reconnection guard: when a fresh login happens (e.g. user scans new QR
+    // or replaces the bot phone), WhatsApp Web syncs all groups and Evolution
+    // forwards a flood of `add` events for users who were ALREADY in the group.
+    // Ignore for the first 120s after the instance came online.
+    const { data: instance } = await supabaseAdmin
+      .from('instances')
+      .select('connected_at')
+      .eq('evolution_instance_name', instanceName)
+      .maybeSingle()
+
+    if (instance?.connected_at) {
+      const ageMs = Date.now() - new Date(instance.connected_at).getTime()
+      if (ageMs < 120_000) {
+        return NextResponse.json({
+          ok: true,
+          ignored: 'instance reconnected recently — likely sync flood',
+        })
+      }
+    }
 
     // Check if group is active
     const { data: group } = await supabaseAdmin
