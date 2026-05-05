@@ -99,6 +99,37 @@ export async function POST(req: Request, { params }: { params: Promise<{ instanc
 
     if (!group) return NextResponse.json({ ok: true })
 
+    // Check that the instance forwarding this event is actually
+    // ASSIGNED to this group. Otherwise, old/unrelated bot instances
+    // that still have a webhook pointing here would inject phantom
+    // joins from groups they happen to be in.
+    const { data: instanceRow } = await supabaseAdmin
+      .from('instances')
+      .select('id')
+      .eq('evolution_instance_name', instanceName)
+      .maybeSingle()
+
+    if (!instanceRow) {
+      return NextResponse.json({
+        ok: true,
+        ignored: 'instance not registered in this app',
+      })
+    }
+
+    const { data: assignment } = await supabaseAdmin
+      .from('group_instances')
+      .select('id')
+      .eq('group_id', group.id)
+      .eq('instance_id', instanceRow.id)
+      .maybeSingle()
+
+    if (!assignment) {
+      return NextResponse.json({
+        ok: true,
+        ignored: 'instance not assigned to this group',
+      })
+    }
+
     // Extract phone numbers — Evolution v2 sends participants as objects with phoneNumber field
     // Older format may send array of strings.
     const rawParticipants: any[] = Array.isArray(eventData?.participants)
