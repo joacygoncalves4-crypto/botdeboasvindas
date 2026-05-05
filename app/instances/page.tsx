@@ -54,6 +54,26 @@ export default function InstancesPage() {
     setLoading(false)
   }, [])
 
+  // Auto-sync phone numbers and status on mount
+  useEffect(() => {
+    fetch('/api/instances/sync-info', { method: 'POST' })
+      .then(() => load())
+      .catch(() => null)
+  }, [load])
+
+  function formatPhone(phone: string | null) {
+    if (!phone) return null
+    const digits = phone.replace(/\D/g, '')
+    // BR format: +55 (81) 99999-9999
+    if (digits.length === 13) {
+      return `+${digits.slice(0,2)} (${digits.slice(2,4)}) ${digits.slice(4,9)}-${digits.slice(9)}`
+    }
+    if (digits.length === 12) {
+      return `+${digits.slice(0,2)} (${digits.slice(2,4)}) ${digits.slice(4,8)}-${digits.slice(8)}`
+    }
+    return phone
+  }
+
   useEffect(() => { load() }, [load])
 
   // Poll status for connecting/qr_code instances
@@ -175,17 +195,22 @@ export default function InstancesPage() {
           {instances.map((inst) => (
             <Card key={inst.id}>
               <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-base">{inst.name}</CardTitle>
-                    <p className="text-xs text-zinc-500 mt-0.5 font-mono">{inst.evolution_instance_name}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <CardTitle className="text-base truncate">{inst.name}</CardTitle>
+                    <p className="text-xs text-zinc-500 mt-0.5 font-mono truncate">{inst.evolution_instance_name}</p>
                   </div>
-                  <Badge variant={inst.status as any}>{statusLabel[inst.status] ?? inst.status}</Badge>
+                  <Badge variant={inst.status as any} className="shrink-0">{statusLabel[inst.status] ?? inst.status}</Badge>
                 </div>
               </CardHeader>
               <CardContent>
-                {inst.phone_number && (
-                  <p className="text-sm text-zinc-400 mb-3">{inst.phone_number}</p>
+                {inst.phone_number ? (
+                  <div className="mb-3 flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-zinc-800/50 border border-zinc-700">
+                    <span className="text-green-400 text-xs">📱</span>
+                    <span className="text-sm font-medium text-zinc-200">{formatPhone(inst.phone_number)}</span>
+                  </div>
+                ) : (
+                  <p className="text-xs text-zinc-600 italic mb-3">Numero ainda nao detectado</p>
                 )}
                 <div className="flex gap-2">
                   {inst.status !== 'connected' && (
